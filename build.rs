@@ -68,12 +68,50 @@ fn build_library(wasi_sdk: Option<PathBuf>) -> anyhow::Result<()> {
 
     build.define("SPIRV_CROSS_ENABLE_MSL", cmake_flag(cfg!(feature = "msl")));
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+
+    if target_os == "android" {
+        // We need to figure out the values for `CMAKE_MAKE_PROGRAM` and `CMAKE_TOOLCHAIN_FILE` if we aim to support Building for Android on other platforms.
+        assert!(cfg!(target_os = "windows"), "Building for Android is currently only supported for Windows.");
+
+        let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+
+        let android_ndk_home = env::var("ANDROID_NDK_HOME")
+            .expect("Environment variable ANDROID_NDK_HOME not set !");
+        let android_abi_name = match target_arch.as_str() {
+            "aarch64" => "arm64-v8a",
+            "arm"     => "armeabi-v7a",
+            _ => panic!("Unexpected CARGO_CFG_TARGET_ARCH: {:?}", target_arch),
+        };
+
+        build.generator("Unix Makefiles");
+        build.define("CMAKE_BUILD_TYPE", "Release");
+        if let Some(cpp) = cpp_stdlib(&target_os) {
+            build.define("ANDROID_STL", cpp);
+        }
+        build.define("ANDROID_ABI", android_abi_name);
+        build.define("ANDROID_PLATFORM", "android-24");
+        build.define("CMAKE_SYSTEM_NAME", "Android");
+        build.define("ANDROID_TOOLCHAIN", "clang");
+        build.define("ANDROID_ARM_MODE", "arm");
+        build.define("CMAKE_MAKE_PROGRAM", format!(r#"{}/prebuilt/windows-x86_64/bin/make.exe"#, android_ndk_home));
+        build.define("CMAKE_TOOLCHAIN_FILE", format!(r#"{}/build/cmake/android.toolchain.cmake"#, android_ndk_home));
+
+        // So `cmake` doesn't set `--target=aarch64-linux-android` for these:
+        build.define("CMAKE_C_FLAGS", "");
+        build.define("CMAKE_CXX_FLAGS", "");
+    }
+
     let out_path = build.no_build_target(true).build().join("build");
-    #[cfg(windows)]
-    let out_path = out_path.join(build.get_profile());
+    let out_path = if target_os == "windows" {
+        out_path.join(build.get_profile())
+    }
+    else {
+        out_path
+    };
 
     println!("cargo:rustc-link-search=native={}", out_path.display());
-    let ext = match cfg!(windows).then(|| build.get_profile()) {
+    let ext = match (target_os == "windows").then(|| build.get_profile()) {
         Some("Debug") => "d",
         _ => "",
     };
@@ -105,7 +143,7 @@ fn build_library(wasi_sdk: Option<PathBuf>) -> anyhow::Result<()> {
         println!("cargo:rustc-link-lib=static=c++");
         println!("cargo:rustc-link-lib=static=c++abi");
         println!("cargo:rustc-link-lib=static=c++experimental");
-    } else if let Some(cpp) = cpp_stdlib(std::env::var("TARGET")?) {
+    } else if let Some(cpp) = cpp_stdlib(&std::env::var("TARGET")?) {
         println!("cargo:rustc-link-lib={cpp}");
     }
 
@@ -186,7 +224,7 @@ fn cmake_flag(v: bool) -> &'static str {
     }
 }
 
-fn cpp_stdlib(target: String) -> Option<&'static str> {
+fn cpp_stdlib(target: &str) -> Option<&'static str> {
     if target.contains("msvc") {
         None
     } else if target.contains("apple") || target.contains("freebsd") || target.contains("openbsd") {

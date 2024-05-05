@@ -30,3 +30,5 @@ fn compile(bytes: &[u8]) -> Result<()> {
 - Windows
 - WebAssembly (WASI)
     - Compiling to WebAssembly from a Windows machine currently doesn't work.
+- Android
+    - Building for Android currently only works on Windows.
